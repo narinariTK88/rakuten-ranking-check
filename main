@@ -1,0 +1,160 @@
+import requests
+import pandas as pd
+import time
+import os
+from datetime import datetime
+from tqdm.notebook import tqdm
+from google.colab import data_table
+from getpass import getpass  # セキュリティ用
+
+# ==========================================
+# 1. セキュリティ設定
+# ==========================================
+# GitHub公開時にIDが漏れないよう、実行時に入力を求めます。
+# 楽天Developersで発行したアプリIDを入力してください。
+print("🔑 楽天APIの認証設定")
+APP_ID = getpass("RAKUTEN_APP_IDを入力してください（入力後Enter）: ")
+
+if not APP_ID:
+    raise ValueError("❌ APP_IDが入力されていません。処理を中断します。")
+
+# ==========================================
+# 2. 関数定義
+# ==========================================
+
+def get_genres(parent_id):
+    """指定したIDの直下にある子ジャンルを取得"""
+    url = "https://app.rakuten.co.jp/services/api/IchibaGenre/Search/20140222"
+    params = {"applicationId": APP_ID, "genreId": parent_id, "format": "json"}
+    try:
+        res = requests.get(url, params=params)
+        data = res.json()
+        return [{"id": g['child']['genreId'], "name": g['child']['genreName']} for g in data.get('children', [])]
+    except:
+        return []
+
+def get_ranking(genre_id, path_history, limit):
+    """ランキングデータを取得し、階層別の列に展開"""
+    results = []
+    pages = (limit // 30) + (1 if limit % 30 > 0 else 0)
+    count = 0
+    
+    pbar = tqdm(total=limit, desc="データ取得中")
+    
+    for p in range(1, pages + 1):
+        if count >= limit: break
+        r_url = "https://app.rakuten.co.jp/services/api/IchibaItem/Ranking/20170628"
+        try:
+            r_res = requests.get(r_url, params={
+                "applicationId": APP_ID, "genreId": genre_id, "page": p, "format": "json"
+            }).json()
+            
+            items = r_res.get('Items', [])
+            if not items: break
+                
+            for item in items:
+                if count >= limit: break
+                it = item['Item']
+                
+                # 基本行データ
+                row = {
+                    "順位": count + 1,
+                    "商品名": it['itemName'],
+                    "価格": it['itemPrice'],
+                    "ショップ名": it['shopName'],
+                    "メーカー名": it.get('brandName', '-'),
+                    "URL": it['itemUrl'],
+                    "取得日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # カテゴリ階層を列に展開 (カテゴリ1, カテゴリ2...)
+                for level, name in enumerate(path_history[1:], 1):
+                    row[f"カテゴリ{level}"] = name
+                        
+                results.append(row)
+                count += 1
+                pbar.update(1)
+            time.sleep(0.5)
+        except:
+            break
+
+    # プログレスバーを強制的に100%にする
+    pbar.n = count
+    pbar.refresh()
+    pbar.close()
+    return results
+
+# ==========================================
+# 3. メインループ
+# ==========================================
+current_id = 0
+path_history = ["全ジャンル"]
+current_id_history = [0]
+
+print("\n🔢 テンキー操作リサーチ (確定:00 / 戻る:000)")
+
+while True:
+    current_name = path_history[-1]
+    current_id = current_id_history[-1]
+    
+    print(f"\n" + "="*50)
+    print(f"📍 現在: {' > '.join(path_history)}")
+    print("="*50)
+    
+    sub_genres = get_genres(current_id)
+    
+    print(f" [ 00 ]  : この階層（{current_name}）でランキング確定")
+    if len(current_id_history) > 1:
+        print(f" [ 000 ] : 一つ上の階層に戻る")
+    
+    if not sub_genres:
+        print(" ※これ以上深い階層はありません。")
+    else:
+        for i, g in enumerate(sub_genres):
+            print(f" {i:2d} : {g['name']}")
+
+    choice = input("\n👉 番号入力: ").strip()
+
+    if choice == '00':
+        try:
+            hits_str = input(f"🔢 「{current_name}」の取得件数: ")
+            hits = int(hits_str)
+            
+            results = get_ranking(current_id, path_history, hits)
+            
+            if results:
+                df = pd.DataFrame(results)
+                
+                # 列の並び順整理（順位 -> カテゴリ... -> 商品名...）
+                cols = df.columns.tolist()
+                cat_cols = sorted([c for c in cols if "カテゴリ" in c])
+                other_cols = [c for c in cols if "カテゴリ" not in c]
+                # new_order = [順位] + [カテゴリ群] + [商品名, 価格, ショップ名, メーカー名, URL, 取得日時]
+                new_order = [other_cols[0]] + cat_cols + [other_cols[1], other_cols[2], other_cols[3], other_cols[4], other_cols[5], other_cols[6]]
+                df = df[new_order]
+
+                # ファイル名生成
+                timestamp = datetime.now().strftime("%Y%m%d%H%M")
+                path_for_file = "_".join(path_history[1:]) if len(path_history) > 1 else "root"
+                filename = f"rakuten_{path_for_file}_{hits}件_{timestamp}.csv"
+                
+                # CSV保存
+                df.to_csv(filename, index=False, encoding="utf-8-sig")
+                print(f"\n✅ 保存完了: {filename}")
+                display(data_table.DataTable(df, include_index=False))
+            break
+        except ValueError:
+            print("❌ 数字を入力してください。")
+
+    elif choice == '000':
+        if len(current_id_history) > 1:
+            path_history.pop()
+            current_id_history.pop()
+        
+    elif choice.isdigit():
+        idx = int(choice)
+        if 0 <= idx < len(sub_genres):
+            path_history.append(sub_genres[idx]['name'])
+            current_id_history.append(sub_genres[idx]['id'])
+        else:
+            print("❌ その番号のカテゴリはありません。")
