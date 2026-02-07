@@ -54,18 +54,20 @@ def get_ranking(genre_id, path_history, limit):
                 if count >= limit: break
                 it = item['Item']
                 
-                # 他の項目と同様に、it['rank'] から直接順位を取得して格納
+                # 行データの構築（レビュー数と評価平均を追加）
                 row = {
                     "順位": it['rank'],
                     "商品名": it['itemName'],
                     "価格": it['itemPrice'],
+                    "レビュー数": it.get('reviewCount', 0),    # 追加
+                    "評価平均": it.get('reviewAverage', 0.0), # 追加
                     "ショップ名": it['shopName'],
                     "メーカー名": it.get('brandName', '-'),
                     "URL": it['itemUrl'],
                     "取得日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 
-                # カテゴリ階層を列に展開 (カテゴリ1, カテゴリ2...)
+                # カテゴリ階層を列に展開
                 for level, name in enumerate(path_history[1:], 1):
                     row[f"カテゴリ{level}"] = name
                         
@@ -123,18 +125,19 @@ while True:
             if results:
                 df = pd.DataFrame(results)
                 
-                # 順位で昇順（1位〜）にソート
+                # 順位で昇順にソート
                 if '順位' in df.columns:
                     df['順位'] = pd.to_numeric(df['順位'], errors='coerce')
                     df = df.sort_values('順位').reset_index(drop=True)
                 
-                # 列の並び順整理（順位 -> カテゴリ... -> 商品名...）
+                # 列の並び順整理
                 cols = df.columns.tolist()
                 cat_cols = sorted([c for c in cols if "カテゴリ" in c])
                 other_cols = [c for c in cols if "カテゴリ" not in c]
-                # 新しい並び順を構築
-                new_order = [other_cols[0]] + cat_cols + other_cols[1:]
-                df = df[new_order]
+                
+                # 表示・保存する列の順番を定義
+                fixed_order = ["順位"] + cat_cols + ["商品名", "価格", "レビュー数", "評価平均", "ショップ名", "メーカー名", "URL", "取得日時"]
+                df = df[fixed_order]
 
                 # ファイル名生成
                 timestamp = datetime.now().strftime("%Y%m%d%H%M")
