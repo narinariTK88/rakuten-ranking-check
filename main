@@ -52,13 +52,19 @@ def get_ranking(genre_id, path_history, limit):
             items = r_res.get('Items', [])
             if not items: break
                 
+            # --- get_ranking 関数内の修正箇所 ---
+
             for item in items:
                 if count >= limit: break
                 it = item['Item']
                 
+                # 【修正】自作の count+1 ではなく、APIが返した rank を直接使う
+                #  ※もしrankが取得できなかった場合のみ、安全策としてcount+1を使います
+                real_rank = item.get('rank', count + 1)
+                
                 # 基本行データ
                 row = {
-                    "順位": count + 1,
+                    "順位": real_rank,  # ← ここをAPIの順位に固定
                     "商品名": it['itemName'],
                     "価格": it['itemPrice'],
                     "ショップ名": it['shopName'],
@@ -66,6 +72,8 @@ def get_ranking(genre_id, path_history, limit):
                     "URL": it['itemUrl'],
                     "取得日時": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
+                
+                # カテゴリ階層を列に展開...（以下、元の処理と同じ）
                 
                 # カテゴリ階層を列に展開 (カテゴリ1, カテゴリ2...)
                 for level, name in enumerate(path_history[1:], 1):
